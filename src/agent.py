@@ -16,7 +16,7 @@ from agent_base import (
     ACTION_COMPLETE
 )
 
-# 兼容主办方环境
+# 加载环境变量
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -27,17 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 class Agent(BaseAgent):
-    """
-    基于 36.36% 高分基线的稳定优化版 Agent
-    """
+    """Web 自动化 Agent，基于原始基线优化"""
 
     def reset(self):
-        """每个测试用例开始前调用"""
+        """每个测试用例开始前重置内部状态"""
         self.internal_history = []
         logger.info("--- 新任务开始，重置状态 ---")
 
     def _build_system_prompt(self, instruction: str) -> str:
-        """构建强制 JSON 输出的系统提示词"""
+        """生成系统提示词"""
         return f"""你是一个智能手机 GUI 自动化助手。
 【任务目标】：{instruction}
 
@@ -69,13 +67,25 @@ class Agent(BaseAgent):
 """
 
     def act(self, input_data: AgentInput) -> AgentOutput:
-        """核心决策逻辑"""
+        """决策主函数"""
         try:
-            # 记录历史操作信息，防止 AI 原地打转
+            # 上一步操作记录，避免重复动作
             history_text = ""
             if input_data.history_actions:
-                last_act = input_data.history_actions[-1]
-                history_text = f"【注意】你上一步执行了动作: {last_act['action']}，参数: {last_act['parameters']}。\n"
+               # 读取最近 3 步
+               recent_history = input_data.history_actions[-3:]
+
+               history_lines = []
+    
+               for idx, act in enumerate(recent_history):
+                 step_desc = (
+                     f"第{-len(recent_history)+idx}步: "
+                     f"动作={act['action']}, "
+                     f"参数={act['parameters']}"
+                 )
+                 history_lines.append(step_desc)
+
+               history_text = "【最近操作历史】\n" + "\n".join(history_lines) + "\n"
 
             messages = [
                 {"role": "system", "content": self._build_system_prompt(input_data.instruction)},
@@ -88,53 +98,62 @@ class Agent(BaseAgent):
                 }
             ]
 
-            # 调用 API
+            # 调用大模型 API
             response = self._call_api(messages, temperature=0.1)
             raw_content = response.choices[0].message.content
             logger.info(f"模型原始输出: {raw_content}")
 
-            # 解析 JSON 结果
+            # 从返回内容中提取 JSON
             parsed_data = self._parse_json_from_text(raw_content)
 
             action = parsed_data.get("action", ACTION_COMPLETE).upper()
             params = parsed_data.get("parameters", {})
 
-            # 确保动作在合法范围内
+            # 限制动作类型在白名单内
             legal_actions = {ACTION_CLICK, ACTION_SCROLL, ACTION_TYPE, ACTION_OPEN, ACTION_COMPLETE}
             if action not in legal_actions:
                 action = ACTION_COMPLETE
 
-            # === 最安全的参数修复区（解决日志里的具体报错，不抛异常） ===
+            # --- 参数格式兜底处理 ---
 
-            # 1. 修复 OPEN 参数不匹配 (解决 expect '爱奇艺', got '' 的问题)
+            # 修复 OPEN 动作的应用名提取
             if action == ACTION_OPEN:
-                # 无论模型输出 app, name 还是 app_name，统统安全提取
+                # 兼容 app_name / app / name 三种 key
                 app_name = params.get("app_name", params.get("app", params.get("name", "")))
                 params = {"app_name": app_name}
 
-            # 2. 修复 CLICK 坐标格式 (防止超出 1000 或出现嵌套列表)
+            # 修复 CLICK 坐标：值域裁剪、展平嵌套列表
             elif action == ACTION_CLICK and "point" in params:
                 try:
                     pt = params["point"]
                     if isinstance(pt, list) and len(pt) > 0 and isinstance(pt[0], list):
-                        pt = pt[0]  # 兼容 [[x, y]] 的错误格式
-                    params["point"] = [max(0, min(1000, int(pt[0]))), max(0, min(1000, int(pt[1])))]
+                        pt = pt[0]
+                    params["point"] = [
+                        max(0, min(1000, int(pt[0]))),
+                        max(0, min(1000, int(pt[1])))
+                    ]
                 except Exception as e:
                     logger.warning(f"CLICK坐标解析异常，保留原样: {e}")
 
-            # 3. 修复 SCROLL 坐标格式
+            # 修复 SCROLL 坐标：值域裁剪、展平嵌套列表
             elif action == ACTION_SCROLL:
                 try:
                     if "start_point" in params:
                         sp = params["start_point"]
                         if isinstance(sp, list) and len(sp) > 0 and isinstance(sp[0], list):
                             sp = sp[0]
-                        params["start_point"] = [max(0, min(1000, int(sp[0]))), max(0, min(1000, int(sp[1])))]
+                        params["start_point"] = [
+                            max(0, min(1000, int(sp[0]))),
+                            max(0, min(1000, int(sp[1])))
+                        ]
                     if "end_point" in params:
                         ep = params["end_point"]
                         if isinstance(ep, list) and len(ep) > 0 and isinstance(ep[0], list):
                             ep = ep[0]
-                        params["end_point"] = [max(0, min(1000, int(ep[0]))), max(0, min(1000, int(ep[1])))]
+                        params["end_point"] = [
+                            max(0, min(1000, int(ep[0]))),
+                            max(0, min(1000, int(ep[1])))
+                        ]
                 except Exception as e:
                     logger.warning(f"SCROLL坐标解析异常，保留原样: {e}")
 
@@ -155,25 +174,25 @@ class Agent(BaseAgent):
             )
 
     def _parse_json_from_text(self, text: str) -> Dict[str, Any]:
-        """从文本中提取 JSON，增强鲁棒性"""
+        """从文本中提取 JSON，增强容错性"""
         try:
             return json.loads(text)
-        except:
-            # 正则提取 json ...  块
+        except Exception:
+            # 尝试匹配 ```json ... ``` 代码块
             match = re.search(r'json\s*(.*?)\s*', text, re.DOTALL | re.IGNORECASE)
             if match:
                 try:
                     return json.loads(match.group(1))
-                except:
+                except Exception:
                     pass
 
-            # 寻找第一个 { 和最后一个 }
+            # 提取第一个 { 到最后一个 } 之间的内容
             start = text.find('{')
             end = text.rfind('}')
             if start != -1 and end != -1:
                 try:
                     return json.loads(text[start:end+1])
-                except:
+                except Exception:
                     pass
 
         return {"action": ACTION_COMPLETE, "parameters": {}}

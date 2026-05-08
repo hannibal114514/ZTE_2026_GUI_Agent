@@ -92,7 +92,7 @@
         {
             "action": "TYPE",
             "params": {
-                "text": "正则 窑村干锅猪蹄.*"
+                "text": "正则 .*窑村干锅猪蹄"
             },
             "next": "5"
         }
@@ -195,7 +195,7 @@
         {
             "action": "TYPE",
             "params": {
-                "text": "干锅排骨"
+                "text": "正则 .*干锅排骨"
             },
             "next": "9"
         },
@@ -226,7 +226,7 @@
         {
             "action": "TYPE",
             "params": {
-                "text": "干锅排骨"
+                "text": "正则 .*干锅排骨"
             },
             "next": "9"
         }
