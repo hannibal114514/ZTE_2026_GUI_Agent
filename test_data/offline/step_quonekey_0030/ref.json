@@ -1,6 +1,6 @@
 {
     "case_overview": {
-        "instruction": "帮我在去哪旅行看一下后天邯郸飞上海的航班，最便宜的是多钱",
+        "instruction": "帮我在去哪儿旅行看一下后天邯郸飞上海的航班，最便宜的是多钱",
         "app": "去哪儿旅行",
         "screen_shape": [
             480,
